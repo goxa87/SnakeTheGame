@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Threading;
+using System.Diagnostics;
 
 namespace DrunkSnake
 {
@@ -67,14 +68,24 @@ namespace DrunkSnake
         /// </summary>
         public Food food { get; set; }
 
+        object locker = new object();
+
+        /// <summary>
+        /// токен отмены цикла ввода направления
+        /// </summary>
+        CancellationTokenSource token = new CancellationTokenSource();
+
         /// <summary>
         /// инициализация игрового поля
         /// </summary>
         /// <param name="timer">длинна задержки при отрисовки</param>
         /// <param name="W">стена игрового поля</param>
         public Field(int timer, Wall W)
-        {            
+        {
+            Console.CursorVisible = false;
+
             //BackgroundColor = ConsoleColor.DarkGray;
+
             wall = W;  // границы игроого поля
             Width = WindowWidth;            
             Height = WindowHeight;
@@ -124,79 +135,123 @@ namespace DrunkSnake
         {
             DrawField(); 
             DrawInfo();
-            while (GameContinue)  // игровой цикл пока не изменится переменная а изменяется колда die класса snake
-            {
-                controller = new Task(ChangeDirection);
-                controller.Start();
-                Drawing(); // отрисовать
-                snake.Move(curDirection[0], curDirection[1]); // передвинуть змею
-                // съедание фрукта
-                if ((snake.position[0][0] == food.W) && (snake.position[0][1] == food.H)) // если координаты еды и головы змеи совпали
-                {
-                    snake.Grow();  // змея растет
-                    Score++; // счет увеличивается
-                    TimerSpeed -=2;  // ожидание следующей итерации уменьшается
-                    if (TimerSpeed < 5) // но не в - и не в бесконечность
-                        TimerSpeed = 5;
-                    food.CahgePosition(snake);  // еда двигается на основе новой змеи
-                }
-                Thread.Sleep(TimerSpeed); //скорость игры
 
-                if(controller.IsCompleted) // освобождаем ресурсы тааска
-                    controller.Dispose();
+            var TaskKey = Task.Factory.StartNew(ChangeDirection, token.Token, token.Token);
+
+            while (GameContinue)  // игровой цикл пока не изменится переменная а изменяется колда die класса snake
+            {         
+                try
+                {
+                    lock (locker)
+                    {
+                        Drawing(); // отрисовать
+                    }
+
+                    snake.Move(curDirection[0], curDirection[1]); // передвинуть змею
+
+                    // съедание фрукта
+                    if ((snake.position[0][0] == food.W) && (snake.position[0][1] == food.H)) // если координаты еды и головы змеи совпали
+                    {
+                        snake.Grow();  // змея растет
+                        Score++; // счет увеличивается
+                        TimerSpeed -=2;  // ожидание следующей итерации уменьшается
+                        if (TimerSpeed < 5) // но не в - и не в бесконечность
+                          TimerSpeed = 5;
+                        food.CahgePosition(snake);  // еда двигается на основе новой змеи
+                    }
+
+                    Thread.Sleep(TimerSpeed); //скорость игры
+                
+                    //if(!token.Token.IsCancellationRequested)
+
+                    //token.Cancel();
+                    //token.Dispose();
+                }
+                catch(AggregateException e)
+                {
+                    //Debug.WriteLine(e.Message);
+                    //controller.Wait();
+                }
+                finally
+                {
+                    //if (controller.IsCanceled)
+                    //    controller.Dispose();
+                    
+                }
+
+                //if(controller.IsCompleted) // освобождаем ресурсы тааска
+                //    controller.Dispose();
             }
+
+            token.Cancel();
+            token.Dispose();
+        }
+
+        ConsoleKey GetKey()
+        {
+            return ReadKey().Key;
         }
 
         /// <summary>
         /// Обработчик нажатия кнопок
         /// </summary>
-        public void ChangeDirection()
+        public void ChangeDirection(object cancel)
         {
-            ConsoleKey consoleKey = ReadKey().Key;
-            // изменение движения
-            switch (consoleKey)
-            {
-                case ConsoleKey.LeftArrow:  // в зависимости от нажатой кнопы
-                    {
-                        if (((snake.position[0][0] - 1) != (snake.position[1][0]))) // если это движение не навстречу своему телу,  т.е еоордината по горизонтали-1
-                                                                                    //это  не тоже что и 2й кубик змеи, то 
-                        {  //  curDirection[0] = вертикаль : [1] - горизонталь + или - зависи от направления влево вправо или вверх вниз
-                            curDirection[1] = -1; // направление меняется
-                            curDirection[0] = 0;
-                        }
-                            
-                        break;
-                    }
-                case ConsoleKey.UpArrow:
-                    {
-                        if (((snake.position[0][1] - 1) != (snake.position[1][1])))
-                        {
-                            curDirection[0] = -1;
-                            curDirection[1] = 0;
-                        }    
-                        break;
-                    }
-                case ConsoleKey.RightArrow:
-                    {
-                        if (((snake.position[0][0] + 1) != (snake.position[1][0])))
-                        {
-                            curDirection[1] = 1;
-                            curDirection[0] = 0;
-                        }
-                        break;
-                       
-                    }
-                case ConsoleKey.DownArrow:
-                    {
-                        if (((snake.position[0][1] + 1) != (snake.position[1][1])))
-                        {
-                            curDirection[1] = 0;
-                            curDirection[0] = 1;
-                        }
-                        break;
-                    }
-            }
+            var t = (CancellationToken)cancel;  // токен отмены
+            
+            ConsoleKey consoleKey = ConsoleKey.A;
 
+            while (true)
+            {
+                consoleKey = ReadKey().Key;
+
+                switch (consoleKey)
+                {
+                    case ConsoleKey.LeftArrow:  // в зависимости от нажатой кнопы
+                        {
+                            if (((snake.position[0][0] - 1) != (snake.position[1][0]))) // если это движение не навстречу своему телу,  т.е еоордината по горизонтали-1
+                                                                                        //это  не тоже что и 2й кубик змеи, то 
+                            {  //  curDirection[0] = вертикаль : [1] - горизонталь + или - зависи от направления влево вправо или вверх вниз
+                                curDirection[1] = -1; // направление меняется
+                                curDirection[0] = 0;
+                            }
+
+                            break;
+                        }
+                    case ConsoleKey.UpArrow:
+                        {
+
+                            if (((snake.position[0][1] - 1) != (snake.position[1][1])))
+                            {
+                                curDirection[0] = -1;
+                                curDirection[1] = 0;
+                            }
+                            break;
+                        }
+                    case ConsoleKey.RightArrow:
+                        {
+                            if (((snake.position[0][0] + 1) != (snake.position[1][0])))
+                            {
+                                curDirection[1] = 1;
+                                curDirection[0] = 0;
+                            }
+                            break;
+
+                        }
+                    case ConsoleKey.DownArrow:
+                        {
+                            if (((snake.position[0][1] + 1) != (snake.position[1][1])))
+                            {
+                                curDirection[1] = 0;
+                                curDirection[0] = 1;
+                            }
+                            break;
+                        }
+                }
+                consoleKey = ConsoleKey.A;
+                if (t.IsCancellationRequested)
+                    return;
+            }            
         }
 
         /// <summary>
